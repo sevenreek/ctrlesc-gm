@@ -112,10 +112,10 @@ class RoomOrchestrator(ABC):
 
     async def stop(self):
         await self.mqtt.disconnect()
+        self._loop.stop()
 
     def stop_loop(self) -> None:
         task = asyncio.create_task(self.stop())
-        self._loop.stop()
 
     async def start(self) -> None:
         await self.mqtt.connect(self.settings.mqtt_url, int(self.settings.mqtt_port))
