@@ -1,15 +1,13 @@
 import asyncio
 from abc import ABC, abstractclassmethod, abstractmethod, abstractproperty
-from typing import Any, Callable
-from collections import defaultdict
 from uuid import uuid4
-from queue import PriorityQueue
 import signal
 from gmqtt import Client as MQTTClient, constants as MQTT
 from os import getpid
 from settings import Settings
 import redis.asyncio as redis
 from types import CoroutineType
+import logging as log
 
 
 class EventHook:
@@ -105,14 +103,18 @@ class RoomOrchestrator(ABC):
         self.running = True
         self._loop.run_until_complete(self.start())
         self._loop.run_until_complete(self.load_stage(from_stage))
+        log.info(f"Starting loop for {self.settings.room_slug}.")
         self._loop.run_forever()
 
     def _stop_signal(self):
+        log.error("Received stop signal.")
         self.stop_loop()
 
     async def stop(self):
+        log.info("Stopping.")
         await self.mqtt.disconnect()
         self._loop.stop()
+        log.info("Stopped.")
 
     def stop_loop(self) -> None:
         task = asyncio.create_task(self.stop())
@@ -124,6 +126,6 @@ class RoomOrchestrator(ABC):
     async def on_message(
         self, client: MQTTClient, topic: str, payload: bytes, qos: int, properties
     ):
-        print(topic, payload.decode())
+        log.debug(topic, payload.decode())
         await self.mqtt_handler.handle(topic, payload)
         return MQTT.PubAckReasonCode.SUCCESS
