@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "gamemaster"
+version = "0.1.0"
+description = ""
+authors = ["wwalewski <w.walewski112@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pydantic = "^2.3.0"
+gmqtt = "^0.6.12"
+pydantic-settings = "^2.0.3"
+redis = {extras = ["hiredis"], version = "^5.0.0"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
