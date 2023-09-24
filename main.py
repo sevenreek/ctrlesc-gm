@@ -1,8 +1,10 @@
 from orchestrator import RoomOrchestrator, StageOrchestrator
 from settings import settings
+import logging as log
 
 
 def main():
+    log.basicConfig(encoding="utf-8", level=settings.log_level)
     stages = [StageOrchestrator(), StageOrchestrator()]
     orchestrator = RoomOrchestrator(stages, settings)
     try:

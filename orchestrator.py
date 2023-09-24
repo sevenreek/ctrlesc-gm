@@ -8,6 +8,7 @@ from settings import Settings
 import redis.asyncio as redis
 from types import CoroutineType
 import logging as log
+from datetime import datetime
 
 
 class EventHook:
@@ -104,6 +105,7 @@ class RoomOrchestrator(ABC):
         self._loop.run_until_complete(self.start())
         self._loop.run_until_complete(self.load_stage(from_stage))
         log.info(f"Starting loop for {self.settings.room_slug}.")
+        self._loop.create_task(self.health_check_update())
         self._loop.run_forever()
 
     def _stop_signal(self):
@@ -121,7 +123,7 @@ class RoomOrchestrator(ABC):
 
     async def start(self) -> None:
         await self.mqtt.connect(self.settings.mqtt_url, int(self.settings.mqtt_port))
-        self.mqtt.subscribe(f"rooms/{self.settings.room_slug}/#")
+        self.mqtt.subscribe(f"room/{self.settings.room_slug}/#")
 
     async def on_message(
         self, client: MQTTClient, topic: str, payload: bytes, qos: int, properties
@@ -129,3 +131,11 @@ class RoomOrchestrator(ABC):
         log.debug(topic, payload.decode())
         await self.mqtt_handler.handle(topic, payload)
         return MQTT.PubAckReasonCode.SUCCESS
+
+    async def health_check_update(self):
+        topic = f"room/{self.settings.room_slug}/health"
+        now = datetime.now().isoformat()
+        while self._loop.is_running():
+            await self.redis.set(topic, now)
+            await self.redis.publish(topic, now)
+            await asyncio.sleep(self.settings.health_check_period / 1000.0)
