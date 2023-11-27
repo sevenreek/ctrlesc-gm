@@ -26,7 +26,7 @@ class DigitalState(MQTTBasedPuzzle):
         index_map: list[str],
     ):
         super().__init__(room_orchestrator_ref, element_slug)
-        self.index_map = index_map
+        self.index_map = list(index_map)
         self.state = [False for _ in range(len(index_map))]
 
     # override
@@ -43,7 +43,12 @@ class DigitalState(MQTTBasedPuzzle):
                 )
 
     async def update_state(self, data: bytes):
-        self.state = [bool(byte) for byte in data]
+        new_state = [bool(byte) for byte in data]
+        if len(new_state) != len(self.state):
+            log.error(
+                f"Puzzle<{self.__class__.__name__}> {self.element_slug} received a state update {new_state} which does not match expected state."
+            )
+        self.state = new_state
         json_data = {self.index_map[i]: value for i, value in enumerate(self.state)}
         await self.trigger_event(Puzzle.Events.EVENT_STATE_CHANGED, json_data)
         if all(self.state):

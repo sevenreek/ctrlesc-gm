@@ -21,9 +21,12 @@ def main():
     try:
         orchestrator.start_loop(stages)
     except KeyboardInterrupt:
-        orchestrator.stop_loop()
+        pass
+    except Exception as e:
+        log.critical(f"Raised unhandled exception. {e}")
     finally:
-        log.warn(f"Stopped room orchestrator {settings.room_slug}.")
+        orchestrator.stop_loop()
+        log.warning(f"Stopped room orchestrator {settings.room_slug}.")
 
 
 if __name__ == "__main__":

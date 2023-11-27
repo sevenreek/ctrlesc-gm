@@ -15,6 +15,7 @@ from typing import Any
 from collections import defaultdict
 from itertools import chain
 from functools import cached_property
+import json
 
 
 class MQTTMessageHandler:
@@ -171,6 +172,10 @@ class Stage(LifecycleElement):
     async def complete(self):
         log.info(f"Stage {repr(self.slug)} was completed.")
         await self.room_orchestrator.finish_stage(self.slug)
+        update_topic = (
+            f"room/completion/{self.room_orchestrator.settings.room_slug}/{self.slug}"
+        )
+        await self.redis.publish(update_topic, int(True))
 
     async def on_puzzle_complete(self, puzzle: Puzzle, detail: Any):
         await self.redis.json().set(
@@ -178,6 +183,8 @@ class Stage(LifecycleElement):
             f'$.stages[?(@.slug=="{self.slug}")].puzzles[?(@.slug =="{puzzle.element_slug}")].completed',
             True,
         )
+        update_topic = f"room/completion/{self.room_orchestrator.settings.room_slug}/{self.slug}/{puzzle.element_slug}"
+        await self.redis.publish(update_topic, int(True))
         all_completed = all((puzzle.completed for puzzle in self.puzzles))
         if all_completed:
             await self.complete()
@@ -188,6 +195,8 @@ class Stage(LifecycleElement):
             f'$.stages[?(@.slug=="{self.slug}")].puzzles[?(@.slug=="{puzzle.element_slug}")].state',
             detail,
         )
+        update_topic = f"room/state/{self.room_orchestrator.settings.room_slug}/{self.slug}/{puzzle.element_slug}"
+        await self.redis.publish(update_topic, json.dumps(detail))
 
 
 class RoomOrchestrator(ABC):
@@ -276,7 +285,7 @@ class RoomOrchestrator(ABC):
         return MQTT.PubAckReasonCode.SUCCESS
 
     async def health_check_update(self):
-        topic = f"room/{self.settings.room_slug}/health"
+        topic = f"room/health/{self.settings.room_slug}"
         now = datetime.now().isoformat()
         while self._loop.is_running():
             await self.redis.set(topic, now)
