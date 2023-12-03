@@ -44,10 +44,11 @@ class DigitalState(MQTTBasedPuzzle):
 
     async def update_state(self, data: bytes):
         new_state = [bool(byte) for byte in data]
-        if len(new_state) != len(self.state):
+        if len(new_state) != len(self.index_map):
             log.error(
                 f"Puzzle<{self.__class__.__name__}> {self.element_slug} received a state update {new_state} which does not match expected state."
             )
+            return
         self.state = new_state
         json_data = {self.index_map[i]: value for i, value in enumerate(self.state)}
         await self.trigger_event(Puzzle.Events.EVENT_STATE_CHANGED, json_data)
