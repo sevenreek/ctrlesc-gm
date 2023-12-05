@@ -19,15 +19,14 @@ class RoomBuilder:
         )
 
     def generate_puzzle(self, puzzle: dict) -> Puzzle:
-        component = puzzle["component"]
-        type = component["type"]
+        type = puzzle["type"]
         slug = puzzle["slug"]
         match type:
             case "digitalState":
-                name_map: dict = component["nameMap"]
+                name_map: dict = puzzle["name_map"]
                 return DigitalState(self.ro, slug, name_map.keys())
             case "sequence":
-                target_sequence: list[str] = component["targetSequence"]
+                target_sequence: list[str] = puzzle["target_state"]
                 return Sequence(self.ro, slug, target_sequence)
             case "speechDetection":
                 return SpeechDetection(self.ro, slug)
