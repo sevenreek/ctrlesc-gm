@@ -3,7 +3,7 @@ from logging import DEBUG as LOG_DEBUG, INFO as LOG_INFO
 
 
 class Settings(BaseSettings):
-    rooms_config_directory: str = "/home/sevenreek/ctrlesc/api/public/config/rooms"
+    rooms_config_directory: str = "/home/sevenreek/ctrlesc/api/api/public/config/rooms"
     room_slug: str = "demonic-presence"
     redis_url: str = "localhost"
     redis_port: str = "6379"
