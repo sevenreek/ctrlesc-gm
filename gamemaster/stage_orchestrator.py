@@ -1,21 +1,16 @@
 import asyncio
-from abc import ABC, abstractclassmethod, abstractmethod, abstractproperty
-from uuid import uuid4
-import signal
-from gmqtt import Client as MQTTClient, constants as MQTT
-from os import getpid
-from settings import Settings
-import redis.asyncio as redis
 from types import CoroutineType
 from log import log
-from datetime import datetime
-from weakref import ReferenceType
 from enum import StrEnum
 from typing import Any
 from collections import defaultdict
 from itertools import chain
 from functools import cached_property
 import json
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from room_orchestrator import RoomOrchestrator
 
 
 class MQTTMessageHandler:
@@ -49,9 +44,9 @@ class MQTTMessageHandler:
 class LifecycleElement:
     def __init__(
         self,
-        room_orchestrator_ref: ReferenceType["RoomOrchestrator"],
+        room_orchestrator: "RoomOrchestrator",
     ):
-        self._room_orchestartor_ref = room_orchestrator_ref
+        self.room_orchestrator = room_orchestrator
         self._registered_handlers: list[MQTTMessageHandler] = []
 
     async def start(self):
@@ -72,11 +67,6 @@ class LifecycleElement:
         return f"room:{self.room_slug}"
 
     @property
-    def room_orchestrator(self):
-        ro = self._room_orchestartor_ref()
-        return ro
-
-    @property
     def mqtt(self):
         return self.room_orchestrator.mqtt
 
@@ -92,10 +82,10 @@ class LifecycleElement:
 class GameElement(LifecycleElement):
     def __init__(
         self,
-        room_orchestrator_ref: ReferenceType["RoomOrchestrator"],
+        room_orchestrator: "RoomOrchestrator",
         element_slug: str,
     ):
-        super().__init__(room_orchestrator_ref)
+        super().__init__(room_orchestrator)
         self.element_slug = element_slug
 
     @cached_property
@@ -111,13 +101,13 @@ class GameObject(GameElement):
     pass
 
 
-class Puzzle(GameElement):
+class PuzzleOrchestrator(GameElement):
     def __init__(
         self,
-        room_orchestrator_ref: ReferenceType["RoomOrchestrator"],
+        room_orchestrator: "RoomOrchestrator",
         element_slug: str,
     ):
-        super().__init__(room_orchestrator_ref, element_slug)
+        super().__init__(room_orchestrator, element_slug)
         self.event_handlers: dict[str, CoroutineType] = {}
         self.completed = False
 
@@ -136,28 +126,29 @@ class Puzzle(GameElement):
         self.completed = True
         if not prev_completed:
             log.info(f"Puzzle {repr(self.element_slug)} was completed.")
-            await self.trigger_event(Puzzle.Events.EVENT_COMPLETED)
+            await self.trigger_event(PuzzleOrchestrator.Events.EVENT_COMPLETED)
 
     def set_event_handler(self, event_type: Events, coro: CoroutineType):
         self.event_handlers[str(event_type)] = coro
 
 
-class Stage(LifecycleElement):
+class StageOrchestrator(LifecycleElement):
     def __init__(
         self,
-        room_orchestrator_ref: ReferenceType["RoomOrchestrator"],
+        room_orchestrator: "RoomOrchestrator",
         stage_slug: str,
-        puzzles: list[Puzzle],
+        puzzles: list[PuzzleOrchestrator],
     ):
-        super().__init__(room_orchestrator_ref)
+        super().__init__(room_orchestrator)
         self.slug = stage_slug
         self.puzzles = puzzles
         for puzzle in self.puzzles:
             puzzle.set_event_handler(
-                Puzzle.Events.EVENT_COMPLETED, self.on_puzzle_complete
+                PuzzleOrchestrator.Events.EVENT_COMPLETED, self.on_puzzle_complete
             )
             puzzle.set_event_handler(
-                Puzzle.Events.EVENT_STATE_CHANGED, self.on_puzzle_state_changed
+                PuzzleOrchestrator.Events.EVENT_STATE_CHANGED,
+                self.on_puzzle_state_changed,
             )
 
     async def start(self):
@@ -177,7 +168,7 @@ class Stage(LifecycleElement):
         )
         await self.redis.publish(update_topic, int(True))
 
-    async def on_puzzle_complete(self, puzzle: Puzzle, detail: Any):
+    async def on_puzzle_complete(self, puzzle: PuzzleOrchestrator, detail: Any):
         await self.redis.json().set(
             self.room_key,
             f'$.stages[?(@.slug=="{self.slug}")].puzzles[?(@.slug =="{puzzle.element_slug}")].completed',
@@ -189,7 +180,7 @@ class Stage(LifecycleElement):
         if all_completed:
             await self.complete()
 
-    async def on_puzzle_state_changed(self, puzzle: Puzzle, detail: Any):
+    async def on_puzzle_state_changed(self, puzzle: PuzzleOrchestrator, detail: Any):
         await self.redis.json().set(
             self.room_key,
             f'$.stages[?(@.slug=="{self.slug}")].puzzles[?(@.slug=="{puzzle.element_slug}")].state',
@@ -197,97 +188,3 @@ class Stage(LifecycleElement):
         )
         update_topic = f"room/state/{self.room_orchestrator.settings.room_slug}/{self.slug}/{puzzle.element_slug}"
         await self.redis.publish(update_topic, json.dumps(detail))
-
-
-class RoomOrchestrator(ABC):
-    def __init__(self, settings: Settings):
-        self.settings = settings
-        self._active_stage_index: int | None = None
-        self._stages: list[Stage] = []
-        self._game_objects: list[GameObject] = []
-        self._loop = asyncio.get_event_loop()
-        self.mqtt = MQTTClient(f"{self.settings.room_slug}-{getpid()}")
-        self.mqtt.on_message = self.on_message
-        self.redis = redis.Redis(
-            host=self.settings.redis_url,
-            port=int(self.settings.redis_port),
-            decode_responses=True,
-            encoding="utf-8",
-        )
-        self.running = False
-        self.mqtt_handler = MQTTMessageHandler()
-        self._loop.add_signal_handler(signal.SIGTERM, self._stop_signal)
-        self._loop.add_signal_handler(signal.SIGINT, self._stop_signal)
-
-    @property
-    def active_stage(self) -> Stage:
-        try:
-            return self._stages[self._active_stage_index]
-        except (IndexError, TypeError):
-            return None
-
-    async def add_game_element(self, ge: GameObject):
-        self._game_objects.append(ge)
-        await ge.start()
-
-    async def remove_game_element(self, ge: GameObject):
-        self._game_objects.remove(ge)
-        await ge.stop()
-
-    async def finish_stage(self, stage_slug: str) -> None:
-        if stage_slug != self.active_stage.slug:
-            raise ValueError(
-                f"Stage {self.active_stage.slug} is not active. Cannot finish."
-            )
-        await self.load_stage(self._active_stage_index + 1)
-
-    async def load_stage(self, stage_index: int) -> None:
-        if self.active_stage:
-            await self.active_stage.stop()
-        self._active_stage_index = stage_index
-        await self.active_stage.start()
-
-    def start_loop(self, stage_list: list[Stage], *, from_stage: int = 0) -> None:
-        self._stages = stage_list
-        self.running = True
-        self._loop.run_until_complete(self.start_mqtt())
-        self._loop.run_until_complete(self.start())
-        self._loop.run_until_complete(self.load_stage(from_stage))
-        log.info(f"Starting loop for {self.settings.room_slug}.")
-        self._loop.create_task(self.health_check_update())
-        self._loop.run_forever()
-
-    def _stop_signal(self):
-        log.error("Received stop signal.")
-        self.stop_loop()
-
-    async def stop(self):
-        log.info("Stopping.")
-        await self.mqtt.disconnect()
-        self._loop.stop()
-        log.info("Stopped.")
-
-    def stop_loop(self) -> None:
-        task = asyncio.create_task(self.stop())
-
-    async def start_mqtt(self) -> None:
-        await self.mqtt.connect(self.settings.mqtt_url, int(self.settings.mqtt_port))
-        self.mqtt.subscribe(f"room/{self.settings.room_slug}/#")
-
-    async def start(self) -> None:
-        pass
-
-    async def on_message(
-        self, client: MQTTClient, topic: str, payload: bytes, qos: int, properties
-    ):
-        log.debug(topic, payload.decode())
-        await self.mqtt_handler.handle(topic, payload)
-        return MQTT.PubAckReasonCode.SUCCESS
-
-    async def health_check_update(self):
-        topic = f"room/health/{self.settings.room_slug}"
-        now = datetime.now().isoformat()
-        while self._loop.is_running():
-            await self.redis.set(topic, now)
-            await self.redis.publish(topic, now)
-            await asyncio.sleep(self.settings.health_check_period / 1000.0)

@@ -1,9 +1,13 @@
-from .orchestrator import Puzzle, ReferenceType, RoomOrchestrator
+from stage_orchestrator import PuzzleOrchestrator, StageOrchestrator
 from settings import settings
 from log import log
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from room_orchestrator import RoomOrchestrator
 
 
-class MQTTBasedPuzzle(Puzzle):
+class MQTTBasedPuzzle(PuzzleOrchestrator):
     async def on_message(self, topic: str, payload: bytes):
         pass
 
@@ -21,11 +25,11 @@ class MQTTBasedPuzzle(Puzzle):
 class DigitalState(MQTTBasedPuzzle):
     def __init__(
         self,
-        room_orchestrator_ref: ReferenceType[RoomOrchestrator],
+        room_orchestrator: "RoomOrchestrator",
         element_slug: str,
         index_map: list[str],
     ):
-        super().__init__(room_orchestrator_ref, element_slug)
+        super().__init__(room_orchestrator, element_slug)
         self.index_map = list(index_map)
         self.state = [False for _ in range(len(index_map))]
 
@@ -51,7 +55,9 @@ class DigitalState(MQTTBasedPuzzle):
             return
         self.state = new_state
         json_data = {self.index_map[i]: value for i, value in enumerate(self.state)}
-        await self.trigger_event(Puzzle.Events.EVENT_STATE_CHANGED, json_data)
+        await self.trigger_event(
+            PuzzleOrchestrator.Events.EVENT_STATE_CHANGED, json_data
+        )
         if all(self.state):
             await self.complete()
 
@@ -59,11 +65,11 @@ class DigitalState(MQTTBasedPuzzle):
 class Sequence(MQTTBasedPuzzle):
     def __init__(
         self,
-        room_orchestrator_ref: ReferenceType[RoomOrchestrator],
+        room_orchestrator: "RoomOrchestrator",
         element_slug: str,
         target_sequence: list[str],
     ):
-        super().__init__(room_orchestrator_ref, element_slug)
+        super().__init__(room_orchestrator, element_slug)
         self.target_sequence = target_sequence
         self.state = [None for _ in range(len(target_sequence))]
 
@@ -85,7 +91,9 @@ class Sequence(MQTTBasedPuzzle):
         json_data = {
             "sequence": [str(sequence_element) for sequence_element in self.state]
         }
-        await self.trigger_event(Puzzle.Events.EVENT_STATE_CHANGED, json_data)
+        await self.trigger_event(
+            PuzzleOrchestrator.Events.EVENT_STATE_CHANGED, json_data
+        )
         if all(self.state):
             await self.complete()
 
