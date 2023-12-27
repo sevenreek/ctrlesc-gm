@@ -1,3 +1,4 @@
+from pydantic import ValidationError
 import asyncio
 from abc import ABC
 import signal
@@ -7,11 +8,25 @@ from settings import Settings
 import redis.asyncio as redis
 from log import log
 from datetime import datetime
-from escmodels.room import RoomConfig
+from escmodels.room import RoomConfig, TimerState, StageState, RoomState
 from escmodels.util import generate_room_initial_state
+from escmodels.requests import SkipPuzzleRequest, TimerAddRequest, TimerStateRequest
 from room_builder import PydanticRoomBuilder
-from stage_orchestrator import StageOrchestrator, GameObject, MQTTMessageHandler
+from stage_orchestrator import (
+    PuzzleOrchestrator,
+    StageOrchestrator,
+    GameObject,
+    MQTTMessageHandler,
+)
 import json
+from dataclasses import dataclass
+import pydantic
+
+
+@dataclass
+class RequestResult:
+    success: bool = True
+    error: str | None = None
 
 
 class RoomOrchestrator(ABC):
@@ -129,26 +144,100 @@ class RoomOrchestrator(ABC):
                 message_id = channel.split("/")[-1]
                 data = json.loads(message["data"])
                 log.info(data)
-                match data["action"]:
-                    case "skip":
-                        pass
-                    case "start":
-                        pass
-                    case "stop":
-                        pass
-                    case "pause":
-                        pass
-                    case "add":
-                        pass
+                try:
+                    result = await self.handle_request(data)
+                except ValidationError as e:
+                    result = RequestResult(False, str(e))
                 ack_channel = f"room/ack/{self.settings.room_slug}/{message_id}"
-                delivered_count = await client.publish(ack_channel, "hello")
+                delivered_count = await client.publish(ack_channel, json.dumps(result))
+
+    def update_puzzle(self, stage: str, puzzle: str, state: dict):
+        pass
+
+    def update_stage(self, stage: str, state: dict):
+        pass
+
+    def find_puzzle(self, stage: str, puzzle: str) -> PuzzleOrchestrator:
+        try:
+            stage_orchestrator = next(s for s in self._stages if s.slug == stage)
+            puzzle_orchestrator = next(
+                p for p in stage_orchestrator.puzzles if p.element_slug == puzzle
+            )
+            return puzzle_orchestrator
+        except StopIteration:
+            raise KeyError(f"Puzzle {stage}/{puzzle} not found.")
+
+    async def handle_request(self, request: dict) -> RequestResult:
+        result = RequestResult()
+        if request["action"] == "skip":
+            request: SkipPuzzleRequest = SkipPuzzleRequest.model_validate(request)
+            try:
+                await self.find_puzzle().skip()
+            except KeyError:
+                result.success = False
+                result.error = (
+                    f"Could not find puzzle {request.puzzle} in stage {request.stage}."
+                )
+        elif request["action"] == "start":
+            if self.state.state in [
+                TimerState.ACTIVE,
+                TimerState.FINISHED,
+                TimerState.STOPPED,
+            ]:
+                result.success = False
+                result.error = (
+                    f"Could not start room that's in state {self.state.state}"
+                )
+            elif self.state.state in [TimerState.READY]:
+                await self.load_stage(0)
+            await self.update_room(
+                start_timestamp=datetime.now().isoformat(), state=TimerState.ACTIVE
+            )
+        elif request["action"] == "pause":
+            if self.state.state in [
+                TimerState.PAUSED,
+                TimerState.FINISHED,
+                TimerState.STOPPED,
+                TimerState.READY,
+            ]:
+                result.success = False
+                result.error = (
+                    f"Could not pause room that's in state {self.state.state}"
+                )
+            elif self.state.state in [TimerState.ACTIVE]:
+                total_time_elapsed = (
+                    self.state.time_elapsed_on_pause
+                    + (
+                        datetime.now()
+                        - datetime.fromisoformat(self.state.start_timestamp)
+                    ).seconds
+                )
+                await self.update_room(
+                    time_elapsed_on_pause=total_time_elapsed, state=TimerState.PAUSED
+                )
+        elif request["action"] == "stop":
+            if self.state.state in [TimerState.STOPPED]:
+                result.success = False
+                result.error = f"Could not stop room that's in state {self.state.state}"
+            else:
+                await self.update_room(state=TimerState.STOPPED)
+        elif request["action"] == "add":
+            request: TimerAddRequest = TimerAddRequest.model_validate(request)
+            await self.update_room(extra_time=self.state.extra_time + request.minutes)
+
+    async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
+        """Updates the room's state. Trusts that kwargs are prevalidated."""
+        self.state = self.state.model_copy(update=kwargs)
+        if stages:
+            self.state.stages = [StageState.model_validate(s) for s in stages]
+        await self.redis.json().set(
+            f"room:{self.settings.room_slug}", "$", self.state.model_dump()
+        )
+        update_topic = f"room/state/{self.settings.room_slug}"
+        await self.redis.publish(update_topic, json.dumps(kwargs))
 
     def room_key(self, slug: str):
         return f"room:{slug}"
 
     async def reset_room_state_redis(self):
-        await self.redis.json().set(
-            f"room:{self.settings.room_slug}",
-            "$",
-            generate_room_initial_state(self.config),
-        )
+        await self.update_room(**generate_room_initial_state(self.config).model_dump())

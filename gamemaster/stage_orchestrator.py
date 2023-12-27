@@ -58,11 +58,11 @@ class LifecycleElement:
     async def reset(self):
         pass
 
-    @cached_property
+    @property
     def room_slug(self):
         return self.room_orchestrator.settings.room_slug
 
-    @cached_property
+    @property
     def room_key(self):
         return f"room:{self.room_slug}"
 
@@ -131,6 +131,9 @@ class PuzzleOrchestrator(GameElement):
     def set_event_handler(self, event_type: Events, coro: CoroutineType):
         self.event_handlers[str(event_type)] = coro
 
+    async def skip(self):
+        await self.complete()
+
 
 class StageOrchestrator(LifecycleElement):
     def __init__(
@@ -187,4 +190,4 @@ class StageOrchestrator(LifecycleElement):
             detail,
         )
         update_topic = f"room/state/{self.room_orchestrator.settings.room_slug}/{self.slug}/{puzzle.element_slug}"
-        await self.redis.publish(update_topic, json.dumps(detail))
+        await self.redis.publish(update_topic, json.dumps({"state": detail}))
