@@ -223,7 +223,9 @@ class RoomOrchestrator(ABC):
                 await self.update_room(state=TimerState.STOPPED)
         elif request["action"] == "add":
             request: TimerAddRequest = TimerAddRequest.model_validate(request)
-            await self.update_room(extra_time=self.state.extra_time + request.minutes)
+            await self.update_room(
+                extra_time=self.state.extra_time + request.minutes * 60
+            )
 
     async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
