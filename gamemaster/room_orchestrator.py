@@ -10,7 +10,12 @@ from log import log
 from datetime import datetime
 from escmodels.room import RoomConfig, TimerState, StageState, RoomState
 from escmodels.util import generate_room_initial_state
-from escmodels.requests import SkipPuzzleRequest, TimerAddRequest, TimerStateRequest
+from escmodels.requests import (
+    SkipPuzzleRequest,
+    TimerAddRequest,
+    TimerStateRequest,
+    RequestResult,
+)
 from room_builder import PydanticRoomBuilder
 from stage_orchestrator import (
     PuzzleOrchestrator,
@@ -19,14 +24,7 @@ from stage_orchestrator import (
     MQTTMessageHandler,
 )
 import json
-from dataclasses import dataclass
 import pydantic
-
-
-@dataclass
-class RequestResult:
-    success: bool = True
-    error: str | None = None
 
 
 class RoomOrchestrator(ABC):
@@ -143,13 +141,14 @@ class RoomOrchestrator(ABC):
                 channel = message["channel"]
                 message_id = channel.split("/")[-1]
                 data = json.loads(message["data"])
-                log.info(data)
                 try:
                     result = await self.handle_request(data)
                 except ValidationError as e:
                     result = RequestResult(False, str(e))
                 ack_channel = f"room/ack/{self.settings.room_slug}/{message_id}"
-                delivered_count = await client.publish(ack_channel, json.dumps(result))
+                delivered_count = await client.publish(
+                    ack_channel, result.model_dump_json()
+                )
 
     def update_puzzle(self, stage: str, puzzle: str, state: dict):
         pass
@@ -226,6 +225,7 @@ class RoomOrchestrator(ABC):
             await self.update_room(
                 extra_time=self.state.extra_time + request.minutes * 60
             )
+        return result
 
     async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
