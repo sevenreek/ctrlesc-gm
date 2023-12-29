@@ -126,7 +126,7 @@ class PuzzleOrchestrator(GameElement):
         self.completed = True
         if not prev_completed:
             log.info(f"Puzzle {repr(self.element_slug)} was completed.")
-            await self.trigger_event(PuzzleOrchestrator.Events.EVENT_COMPLETED)
+            await self.trigger_event(PuzzleOrchestrator.Events.EVENT_COMPLETED, True)
 
     def set_event_handler(self, event_type: Events, coro: CoroutineType):
         self.event_handlers[str(event_type)] = coro
@@ -166,28 +166,16 @@ class StageOrchestrator(LifecycleElement):
     async def complete(self):
         log.info(f"Stage {repr(self.slug)} was completed.")
         await self.room_orchestrator.finish_stage(self.slug)
-        update_topic = (
-            f"room/completion/{self.room_orchestrator.settings.room_slug}/{self.slug}"
-        )
-        await self.redis.publish(update_topic, int(True))
 
-    async def on_puzzle_complete(self, puzzle: PuzzleOrchestrator, detail: Any):
-        await self.redis.json().set(
-            self.room_key,
-            f'$.stages[?(@.slug=="{self.slug}")].puzzles[?(@.slug =="{puzzle.element_slug}")].completed',
-            True,
+    async def on_puzzle_complete(self, puzzle: PuzzleOrchestrator, detail: bool):
+        await self.room_orchestrator.update_puzzle(
+            self.slug, puzzle.element_slug, completed=detail
         )
-        update_topic = f"room/completion/{self.room_orchestrator.settings.room_slug}/{self.slug}/{puzzle.element_slug}"
-        await self.redis.publish(update_topic, int(True))
         all_completed = all((puzzle.completed for puzzle in self.puzzles))
         if all_completed:
             await self.complete()
 
-    async def on_puzzle_state_changed(self, puzzle: PuzzleOrchestrator, detail: Any):
-        await self.redis.json().set(
-            self.room_key,
-            f'$.stages[?(@.slug=="{self.slug}")].puzzles[?(@.slug=="{puzzle.element_slug}")].state',
-            detail,
+    async def on_puzzle_state_changed(self, puzzle: PuzzleOrchestrator, detail: dict):
+        await self.room_orchestrator.update_puzzle(
+            self.slug, puzzle.element_slug, state=detail
         )
-        update_topic = f"room/state/{self.room_orchestrator.settings.room_slug}/{self.slug}/{puzzle.element_slug}"
-        await self.redis.publish(update_topic, json.dumps({"state": detail}))

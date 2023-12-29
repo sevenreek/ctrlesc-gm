@@ -52,6 +52,10 @@ class RoomOrchestrator(ABC):
 
     async def load_state(self):
         self.state = generate_room_initial_state(self.config)
+        self.puzzle_state_map = {
+            stage.slug: {puzzle.slug: puzzle for puzzle in stage.puzzles}
+            for stage in self.state.stages
+        }
         await self.reset_room_state_redis()
 
     @property
@@ -81,6 +85,7 @@ class RoomOrchestrator(ABC):
             await self.active_stage.stop()
         self._active_stage_index = stage_index
         await self.active_stage.start()
+        await self.update_room(active_stage=self._active_stage_index)
 
     def start_loop(self, *, from_stage: int = 0) -> None:
         self.running = True
@@ -150,10 +155,18 @@ class RoomOrchestrator(ABC):
                     ack_channel, result.model_dump_json()
                 )
 
-    def update_puzzle(self, stage: str, puzzle: str, state: dict):
-        pass
+    async def update_puzzle(self, stage: str, puzzle: str, /, **kwargs):
+        puzzle_state = self.puzzle_state_map[stage][puzzle]
+        puzzle_state.__dict__.update(kwargs)
+        await self.redis.json().set(
+            self.room_key,
+            f'$.stages[?(@.slug=="{stage}")].puzzles[?(@.slug=="{puzzle}")]',
+            puzzle_state.model_dump(),
+        )
+        update_topic = f"room/state/{self.settings.room_slug}/{stage}/{puzzle}"
+        await self.redis.publish(update_topic, json.dumps(kwargs))
 
-    def update_stage(self, stage: str, state: dict):
+    async def update_stage(self, stage: str, state: dict):
         pass
 
     def find_puzzle(self, stage: str, puzzle: str) -> PuzzleOrchestrator:
@@ -169,9 +182,9 @@ class RoomOrchestrator(ABC):
     async def handle_request(self, request: dict) -> RequestResult:
         result = RequestResult()
         if request["action"] == "skip":
-            request: SkipPuzzleRequest = SkipPuzzleRequest.model_validate(request)
+            valid_request = SkipPuzzleRequest.model_validate(request)
             try:
-                await self.find_puzzle().skip()
+                await self.find_puzzle(valid_request.stage, valid_request.puzzle).skip()
             except KeyError:
                 result.success = False
                 result.error = (
@@ -221,25 +234,33 @@ class RoomOrchestrator(ABC):
             else:
                 await self.update_room(state=TimerState.STOPPED)
         elif request["action"] == "add":
-            request: TimerAddRequest = TimerAddRequest.model_validate(request)
+            valid_request: TimerAddRequest = TimerAddRequest.model_validate(request)
             await self.update_room(
-                extra_time=self.state.extra_time + request.minutes * 60
+                extra_time=self.state.extra_time + valid_request.minutes * 60
             )
         return result
+
+    def update_puzzle_state_map(self):
+        self.puzzle_state_map = {
+            stage.slug: {puzzle.slug: puzzle for puzzle in stage.puzzles}
+            for stage in self.state.stages
+        }
 
     async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
         self.state = self.state.model_copy(update=kwargs)
         if stages:
             self.state.stages = [StageState.model_validate(s) for s in stages]
+            self.update_puzzle_state_map()
         await self.redis.json().set(
             f"room:{self.settings.room_slug}", "$", self.state.model_dump()
         )
         update_topic = f"room/state/{self.settings.room_slug}"
         await self.redis.publish(update_topic, json.dumps(kwargs))
 
-    def room_key(self, slug: str):
-        return f"room:{slug}"
+    @property
+    def room_key(self):
+        return f"room:{self.settings.room_slug}"
 
     async def reset_room_state_redis(self):
         await self.update_room(**generate_room_initial_state(self.config).model_dump())
