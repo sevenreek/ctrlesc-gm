@@ -2,7 +2,7 @@ from stage_orchestrator import StageOrchestrator, PuzzleOrchestrator
 from typing import TYPE_CHECKING
 from puzzles import DigitalState, SpeechDetection, Sequence
 from escmodels.room import StageConfig
-from escmodels.puzzle import AnyPuzzleConfig
+from escmodels.puzzle import AnyPuzzleConfig, PuzzleType
 
 if TYPE_CHECKING:
     from room_orchestrator import RoomOrchestrator
@@ -46,19 +46,18 @@ class PydanticRoomBuilder:
         return [self.generate_stage(stage_data) for stage_data in stages_data]
 
     def generate_stage(self, stage: StageConfig) -> StageOrchestrator:
-        return StageOrchestrator(
-            self.ro,
-            stage.slug,
-            [self.generate_puzzle(puzzle_data) for puzzle_data in stage.puzzles],
-        )
+        puzzles = [self.generate_puzzle(puzzle_data) for puzzle_data in stage.puzzles]
+        return StageOrchestrator(self.ro, stage.slug, puzzles)
 
     def generate_puzzle(self, puzzle: AnyPuzzleConfig) -> PuzzleOrchestrator:
         match puzzle.type:
-            case "digitalState":
+            case PuzzleType.DIGITAL_STATE:
                 name_map: dict = puzzle.name_map
                 return DigitalState(self.ro, puzzle.slug, name_map.keys())
-            case "sequence":
-                target_sequence: list[str] = puzzle.target_state
+            case PuzzleType.SEQUENCE:
+                target_sequence: list[str] = puzzle.extras.target_state
                 return Sequence(self.ro, puzzle.slug, target_sequence)
-            case "speechDetection":
+            case PuzzleType.SPEECH_DETECTION:
                 return SpeechDetection(self.ro, puzzle.slug)
+            case _:
+                raise ValueError(f"Puzzle type {puzzle.type} not supported.")

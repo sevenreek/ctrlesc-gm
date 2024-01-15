@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     health_check_period: int = 5000  # ms
     log_level: str | int = LOG_INFO
     endianness: str = "big"
+    db_user: str = "postgres"
+    db_password: str = "masterkey"
+    db_host: str = "localhost:5555"
+    db_name: str = "postgres"
 
 
 settings = Settings()
