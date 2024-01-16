@@ -24,7 +24,7 @@ from stage_orchestrator import (
     GameObject,
     MQTTMessageHandler,
 )
-from typing import Optional
+from typing import Any, Optional
 import json
 from db import obtain_session
 from sqlalchemy import update
@@ -88,6 +88,8 @@ class RoomOrchestrator(ABC):
         await ge.stop()
 
     def get_total_elapsed_time(self) -> int:
+        if self.state.state is not TimerState.ACTIVE:
+            return self.state.time_elapsed_on_pause
         return (
             self.state.time_elapsed_on_pause
             + (
@@ -132,11 +134,28 @@ class RoomOrchestrator(ABC):
             time_elapsed_on_pause=total_time_elapsed,
         )
 
+    async def save_db_event(self, type: GameEventType, data: Any = None):
+        if self.state.active_game_id is None:
+            raise RuntimeError("Cannot create events without a game running.")
+        async with obtain_session() as session:
+            event = GameEvent(
+                game_id=self.state.active_game_id,
+                created_on=datetime.now(),
+                gametime=self.get_total_elapsed_time(),
+                type=type,
+                data=data,
+            )
+            session.add(event)
+            await session.commit()
+
     async def finish_stage(self, stage_slug: str) -> None:
         if stage_slug != self.active_stage.slug:
             raise ValueError(
                 f"Stage {self.active_stage.slug} is not active. Cannot finish."
             )
+        await self.save_db_event(
+            GameEventType.STAGE_COMPLETED, {"stage": self.active_stage_index}
+        )
         if self.active_stage_index == len(self.state.stages) - 1:
             await self.finish_game(True)
         else:
@@ -325,6 +344,11 @@ class RoomOrchestrator(ABC):
 
     async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
+
+        if "state" in kwargs and self.state.active_game_id:
+            await self.save_db_event(
+                GameEventType.TIMER_CHANGED, {"state": kwargs["state"]}
+            )
         self.state = self.state.model_copy(update=kwargs)
         redis_update_data = kwargs
         if stages:
