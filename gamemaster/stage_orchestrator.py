@@ -49,6 +49,9 @@ class LifecycleElement:
         self.room_orchestrator = room_orchestrator
         self._registered_handlers: list[MQTTMessageHandler] = []
 
+    def reset_internal_state(self):
+        pass
+
     async def start(self):
         pass
 
@@ -56,7 +59,7 @@ class LifecycleElement:
         pass
 
     async def reset(self):
-        pass
+        self.reset_internal_state()
 
     @property
     def room_slug(self):
@@ -133,6 +136,9 @@ class PuzzleOrchestrator(GameElement):
 
     async def skip(self):
         await self.complete()
+
+    async def reset(self):
+        self.completed = False
 
 
 class StageOrchestrator(LifecycleElement):

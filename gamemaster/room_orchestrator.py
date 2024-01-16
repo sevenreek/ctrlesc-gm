@@ -326,12 +326,16 @@ class RoomOrchestrator(ABC):
     async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
         self.state = self.state.model_copy(update=kwargs)
+        redis_update_data = kwargs
         if stages:
             self.state.stages = [StageState.model_validate(s) for s in stages]
             self.update_puzzle_state_map()
+            redis_update_data["stages"] = [
+                stage.model_dump() for stage in self.state.stages
+            ]
         await self.redis.json().set(self.room_key, "$", self.state.model_dump())
         update_topic = f"room/state/{self.settings.room_slug}"
-        await self.redis.publish(update_topic, json.dumps(kwargs))
+        await self.redis.publish(update_topic, json.dumps(redis_update_data))
 
     async def reset_room_state_redis(self):
         await self.update_room(**generate_room_initial_state(self.config).model_dump())

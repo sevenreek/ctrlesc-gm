@@ -31,7 +31,10 @@ class DigitalState(MQTTBasedPuzzle):
     ):
         super().__init__(room_orchestrator, element_slug)
         self.index_map = list(index_map)
-        self.state = [False for _ in range(len(index_map))]
+        self.reset_internal_state()
+
+    def reset_internal_state(self):
+        self.state = [False for _ in range(len(self.index_map))]
 
     # override
     async def on_message(self, topic: str, payload: bytes):
@@ -71,7 +74,10 @@ class Sequence(MQTTBasedPuzzle):
     ):
         super().__init__(room_orchestrator, element_slug)
         self.target_sequence = target_sequence
-        self.state = [None for _ in range(len(target_sequence))]
+        self.reset_internal_state()
+
+    def reset_internal_state(self):
+        self.state = [None for _ in range(len(self.target_sequence))]
 
     # override
     async def on_message(self, topic: str, payload: bytes):
