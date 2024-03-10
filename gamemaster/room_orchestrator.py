@@ -9,7 +9,15 @@ import redis.asyncio as redis
 from log import log
 from datetime import datetime
 import escmodels.base as base
-from escmodels.db.models import Game, GameEvent, GameEventType, GameResult
+from escmodels.db.models import (
+    Game,
+    GameEvent,
+    GameEventType,
+    GameResult,
+    StageCompletion,
+    Stage,
+    Room,
+)
 from escmodels.requests import (
     SkipPuzzleRequest,
     TimerAddRequest,
@@ -26,7 +34,7 @@ from stage_orchestrator import (
 from typing import Any, Optional
 import json
 from db import obtain_session
-from sqlalchemy import update
+from sqlalchemy import update, select
 
 
 class RoomOrchestrator(ABC):
@@ -50,6 +58,8 @@ class RoomOrchestrator(ABC):
         self.mqtt_handler = MQTTMessageHandler()
         self._loop.add_signal_handler(signal.SIGTERM, self._stop_signal)
         self._loop.add_signal_handler(signal.SIGINT, self._stop_signal)
+        self.stage_db_ids: list[int] = []
+        self.stage_completions: list[int] = []
 
     async def load_state(self):
         self.state = base.generate_room_initial_state(self.config)
@@ -77,6 +87,12 @@ class RoomOrchestrator(ABC):
             return self._stages[self.active_stage_index]
         except (IndexError, TypeError):
             return None
+
+    @property
+    def last_stage_completion(self) -> int:
+        if not len(self.stage_completions):
+            return 0
+        return self.stage_completions[-1]
 
     async def add_game_element(self, ge: GameObject):
         self._game_objects.append(ge)
@@ -152,9 +168,20 @@ class RoomOrchestrator(ABC):
             raise ValueError(
                 f"Stage {self.active_stage.slug} is not active. Cannot finish."
             )
-        await self.save_db_event(
-            GameEventType.STAGE_COMPLETED, {"stage": self.active_stage_index}
-        )
+        stage_gametime = self.get_total_elapsed_time()
+        async with obtain_session() as session:
+            completion = StageCompletion(
+                stage_id=self.stage_db_ids[self.active_stage_index],
+                game_id=self.state.active_game_id,
+                duration=stage_gametime - self.last_stage_completion,
+                gametime=stage_gametime,
+            )
+            session.add(completion)
+            await session.commit()
+        self.stage_completions.append(stage_gametime)
+        await self.redis.rpush(f"{self.room_key}/stage_completions", stage_gametime)
+        update_topic = f"room/completions/{self.settings.room_slug}"
+        await self.redis.publish(update_topic, json.dumps(stage_gametime))
         if self.active_stage_index == len(self.state.stages) - 1:
             await self.finish_game(True)
         else:
@@ -195,7 +222,16 @@ class RoomOrchestrator(ABC):
         self.mqtt.subscribe(f"room/{self.room_slug}/#")
 
     async def start(self) -> None:
-        pass
+        await self.drop_stage_completions_list()
+        async with obtain_session() as session:
+            sql = (
+                select(Stage)
+                .join(Room, Stage.room_id == Room.id)
+                .where(Room.slug == self.room_slug)
+                .order_by(Stage.index)
+            )
+            result = await session.execute(sql)
+            self.stage_db_ids = [stage.id for stage in result.scalars()]
 
     async def on_message(
         self, client: MQTTClient, topic: str, payload: bytes, qos: int, properties
@@ -254,6 +290,10 @@ class RoomOrchestrator(ABC):
             return puzzle_orchestrator
         except StopIteration:
             raise KeyError(f"Puzzle {stage}/{puzzle} not found.")
+
+    async def drop_stage_completions_list(self):
+        self.stage_completions = []
+        await self.redis.delete(f"{self.room_key}/stage_completions")
 
     async def handle_request(self, request: dict) -> RequestResult:
         result = RequestResult()
