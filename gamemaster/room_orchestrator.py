@@ -8,8 +8,7 @@ from settings import Settings
 import redis.asyncio as redis
 from log import log
 from datetime import datetime
-from escmodels.room import RoomConfig, TimerState, StageState, RoomState
-from escmodels.util import generate_room_initial_state, generate_game_nanoid
+import escmodels.base as base
 from escmodels.db.models import Game, GameEvent, GameEventType, GameResult
 from escmodels.requests import (
     SkipPuzzleRequest,
@@ -31,7 +30,7 @@ from sqlalchemy import update
 
 
 class RoomOrchestrator(ABC):
-    def __init__(self, settings: Settings, config: RoomConfig):
+    def __init__(self, settings: Settings, config: base.RoomConfig):
         self.settings = settings
         self.config = config
         self._stages: list[StageOrchestrator] = PydanticRoomBuilder(
@@ -53,7 +52,7 @@ class RoomOrchestrator(ABC):
         self._loop.add_signal_handler(signal.SIGINT, self._stop_signal)
 
     async def load_state(self):
-        self.state = generate_room_initial_state(self.config)
+        self.state = base.generate_room_initial_state(self.config)
         self.puzzle_state_map = {
             stage.slug: {puzzle.slug: puzzle for puzzle in stage.puzzles}
             for stage in self.state.stages
@@ -88,7 +87,7 @@ class RoomOrchestrator(ABC):
         await ge.stop()
 
     def get_total_elapsed_time(self) -> int:
-        if self.state.state is not TimerState.ACTIVE:
+        if self.state.state is not base.TimerState.ACTIVE:
             return self.state.time_elapsed_on_pause
         return (
             self.state.time_elapsed_on_pause
@@ -105,7 +104,7 @@ class RoomOrchestrator(ABC):
         )
 
     async def finish_game(self, success: bool | None = False):
-        new_state: TimerState = TimerState.FINISHED
+        new_state: base.TimerState = base.TimerState.FINISHED
         total_time_elapsed = self.get_total_elapsed_time()
         stop_timestamp = datetime.now()
         update_values: dict = {
@@ -113,7 +112,7 @@ class RoomOrchestrator(ABC):
             "ended_on": stop_timestamp,
         }
         if success is None:  # stopped
-            new_state = TimerState.STOPPED
+            new_state = base.TimerState.STOPPED
             update_values["result"] = GameResult.STOPPED
         elif success:  # game won
             update_values["result"] = GameResult.COMPLETED
@@ -271,16 +270,16 @@ class RoomOrchestrator(ABC):
                     )
             elif request["action"] == "start":
                 if self.state.state in [
-                    TimerState.ACTIVE,
-                    TimerState.FINISHED,
-                    TimerState.STOPPED,
+                    base.TimerState.ACTIVE,
+                    base.TimerState.FINISHED,
+                    base.TimerState.STOPPED,
                 ]:
                     raise ValueError(
                         f"Could not start room that's in state {self.state.state}"
                     )
-                elif self.state.state in [TimerState.READY]:
+                elif self.state.state in [base.TimerState.READY]:
                     async with obtain_session() as session:
-                        game_id = generate_game_nanoid()
+                        game_id = base.generate_game_nanoid()
                         start_timestamp = datetime.now()
                         game = Game(
                             room_slug=self.room_slug,
@@ -291,21 +290,21 @@ class RoomOrchestrator(ABC):
                         await session.commit()
                         await self.update_room(
                             start_timestamp=start_timestamp.isoformat(),
-                            state=TimerState.ACTIVE,
+                            state=base.TimerState.ACTIVE,
                             active_game_id=game_id,
                         )
                         await self.load_stage(0)
             elif request["action"] == "pause":
                 if self.state.state in [
-                    TimerState.PAUSED,
-                    TimerState.FINISHED,
-                    TimerState.STOPPED,
-                    TimerState.READY,
+                    base.TimerState.PAUSED,
+                    base.TimerState.FINISHED,
+                    base.TimerState.STOPPED,
+                    base.TimerState.READY,
                 ]:
                     raise ValueError(
                         f"Could not pause room that's in state {self.state.state}"
                     )
-                elif self.state.state in [TimerState.ACTIVE]:
+                elif self.state.state in [base.TimerState.ACTIVE]:
                     total_time_elapsed = (
                         self.state.time_elapsed_on_pause
                         + (
@@ -315,10 +314,10 @@ class RoomOrchestrator(ABC):
                     )
                     await self.update_room(
                         time_elapsed_on_pause=total_time_elapsed,
-                        state=TimerState.PAUSED,
+                        state=base.TimerState.PAUSED,
                     )
             elif request["action"] == "stop":
-                if self.state.state in [TimerState.STOPPED]:
+                if self.state.state in [base.TimerState.STOPPED]:
                     raise ValueError(
                         f"Could not stop room that's in state {self.state.state}"
                     )
@@ -352,7 +351,7 @@ class RoomOrchestrator(ABC):
         self.state = self.state.model_copy(update=kwargs)
         redis_update_data = kwargs
         if stages:
-            self.state.stages = [StageState.model_validate(s) for s in stages]
+            self.state.stages = [base.StageState.model_validate(s) for s in stages]
             self.update_puzzle_state_map()
             redis_update_data["stages"] = [
                 stage.model_dump() for stage in self.state.stages
@@ -362,4 +361,6 @@ class RoomOrchestrator(ABC):
         await self.redis.publish(update_topic, json.dumps(redis_update_data))
 
     async def reset_room_state_redis(self):
-        await self.update_room(**generate_room_initial_state(self.config).model_dump())
+        await self.update_room(
+            **base.generate_room_initial_state(self.config).model_dump()
+        )

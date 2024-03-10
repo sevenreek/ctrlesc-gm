@@ -3,7 +3,7 @@ from room_orchestrator import RoomOrchestrator
 from settings import settings
 import json
 import os
-from escmodels.room import RoomConfig
+import escmodels.base as base
 
 
 def main():
@@ -13,7 +13,7 @@ def main():
     )
     with open(room_config_filepath) as file:
         room_data = json.load(file)
-    orchestrator = RoomOrchestrator(settings, RoomConfig.model_validate(room_data))
+    orchestrator = RoomOrchestrator(settings, base.RoomConfig.model_validate(room_data))
     try:
         orchestrator.start_loop()
     except KeyboardInterrupt:
