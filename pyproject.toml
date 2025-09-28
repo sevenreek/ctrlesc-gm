@@ -1,21 +1,32 @@
-[tool.poetry]
-name = "gamemaster"
+[project]
+name = "ctrlesc-gm"
 version = "0.1.0"
-description = ""
-authors = ["wwalewski <w.walewski112@gmail.com>"]
+description = "Add your description here"
+authors = [
+    { name = "sevenreek", email = "sevenreek@gmail.com" }
+]
+dependencies = [
+    "pydantic>=2.11.9",
+    "gmqtt>=0.7.0",
+    "pydantic-settings>=2.11.0",
+    "redis[hiredis]>=6.4.0",
+    "asyncpg>=0.30.0",
+    "sqlalchemy>=2.0.43",
+    "ctrlesc-models @ file:///home/sevenreek/Development/ctrlesc/ctrlesc-gm/../ctrlesc-models",
+]
 readme = "README.md"
-
-[tool.poetry.dependencies]
-python = "^3.11"
-pydantic = "^2.3.0"
-gmqtt = "^0.6.12"
-pydantic-settings = "^2.0.3"
-redis = {extras = ["hiredis"], version = "^5.0.0"}
-escmodels = {path = "../escmodels", develop = true}
-asyncpg = "^0.29.0"
-sqlalchemy = "^2.0.25"
-
+requires-python = ">= 3.12"
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = []
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ctrlesc_gm"]

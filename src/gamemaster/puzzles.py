@@ -1,7 +1,8 @@
-from stage_orchestrator import PuzzleOrchestrator, StageOrchestrator
-from settings import settings
-from log import log
 from typing import TYPE_CHECKING
+
+from gamemaster.log import log
+from gamemaster.settings import settings
+from gamemaster.stage_orchestrator import PuzzleOrchestrator
 
 if TYPE_CHECKING:
     from room_orchestrator import RoomOrchestrator

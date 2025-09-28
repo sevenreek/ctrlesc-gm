@@ -1,13 +1,16 @@
-from pydantic import ValidationError
+import json
 import asyncio
-from abc import ABC
 import signal
-from gmqtt import Client as MQTTClient, constants as MQTT
-from os import getpid
-from settings import Settings
-import redis.asyncio as redis
-from log import log
+from abc import ABC
+from typing import Any
 from datetime import datetime
+from os import getpid
+
+from pydantic import ValidationError
+from sqlalchemy import update, select
+from gmqtt import Client as MQTTClient, constants as MQTT
+import redis.asyncio as redis
+
 import escmodels.base as base
 from escmodels.db.models import (
     Game,
@@ -21,21 +24,19 @@ from escmodels.db.models import (
 from escmodels.requests import (
     SkipPuzzleRequest,
     TimerAddRequest,
-    TimerStateRequest,
     RequestResult,
 )
-from room_builder import PydanticRoomBuilder
-from stage_orchestrator import (
+
+from gamemaster.db import obtain_session
+from gamemaster.log import log
+from gamemaster.settings import Settings
+from gamemaster.room_builder import PydanticRoomBuilder
+from gamemaster.stage_orchestrator import (
     PuzzleOrchestrator,
     StageOrchestrator,
     GameObject,
     MQTTMessageHandler,
 )
-from typing import Any, Optional
-import json
-from db import obtain_session
-from sqlalchemy import update, select
-
 
 class RoomOrchestrator(ABC):
     def __init__(self, settings: Settings, config: base.RoomConfig):
@@ -82,11 +83,10 @@ class RoomOrchestrator(ABC):
         return self.state.active_stage
 
     @property
-    def active_stage(self) -> StageOrchestrator:
-        try:
-            return self._stages[self.active_stage_index]
-        except (IndexError, TypeError):
+    def active_stage(self) -> StageOrchestrator | None:
+        if self.active_stage_index is None:
             return None
+        return self._stages[self.active_stage_index]
 
     @property
     def last_stage_completion(self) -> int:

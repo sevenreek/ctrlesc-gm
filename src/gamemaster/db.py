@@ -1,7 +1,7 @@
 import contextlib
-from typing import Annotated
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from settings import settings
+
+from gamemaster.settings import settings
 
 
 db_url = f"postgresql+asyncpg://{settings.db_user}:{settings.db_password}@{settings.db_host}/{settings.db_name}"

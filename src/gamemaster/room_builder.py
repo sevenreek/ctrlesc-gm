@@ -1,6 +1,7 @@
-from stage_orchestrator import StageOrchestrator, PuzzleOrchestrator
-from typing import TYPE_CHECKING
-from puzzles import DigitalState, SpeechDetection, Sequence
+from typing import TYPE_CHECKING, Any
+
+from gamemaster.stage_orchestrator import StageOrchestrator, PuzzleOrchestrator
+from gamemaster.puzzles import DigitalState, SpeechDetection, Sequence
 import escmodels.base as base
 
 if TYPE_CHECKING:
@@ -11,10 +12,10 @@ class RoomBuilder:
     def __init__(self, room_orchestator: "RoomOrchestrator"):
         self.ro = room_orchestator
 
-    def generate_stages_from_json(self, stages_data: list[dict]):
+    def generate_stages_from_json(self, stages_data: list[dict[str, Any]]):
         return [self.generate_stage(stage_data) for stage_data in stages_data]
 
-    def generate_stage(self, stage: dict) -> StageOrchestrator:
+    def generate_stage(self, stage: dict[str, Any]) -> StageOrchestrator:
         puzzles = stage["puzzles"]
         slug = stage["slug"]
         return StageOrchestrator(
@@ -23,18 +24,20 @@ class RoomBuilder:
             [self.generate_puzzle(puzzle_data) for puzzle_data in puzzles],
         )
 
-    def generate_puzzle(self, puzzle: dict) -> PuzzleOrchestrator:
-        type = puzzle["type"]
-        slug = puzzle["slug"]
+    def generate_puzzle(self, puzzle: dict[str, Any]) -> PuzzleOrchestrator:
+        type: str = puzzle["type"]
+        slug: str = puzzle["slug"]
         match type:
             case "digitalState":
-                name_map: dict = puzzle["name_map"]
-                return DigitalState(self.ro, slug, name_map.keys())
+                name_map: dict[str, str] = puzzle["name_map"]
+                return DigitalState(self.ro, slug, list(name_map.keys()))
             case "sequence":
                 target_sequence: list[str] = puzzle["target_state"]
                 return Sequence(self.ro, slug, target_sequence)
             case "speechDetection":
                 return SpeechDetection(self.ro, slug)
+            case _:
+                raise TypeError(f"Unrecognized puzzle type {type} for {slug}")
 
 
 class PydanticRoomBuilder:
@@ -51,12 +54,11 @@ class PydanticRoomBuilder:
     def generate_puzzle(self, puzzle: base.AnyPuzzleConfig) -> PuzzleOrchestrator:
         match puzzle.type:
             case base.PuzzleType.DIGITAL_STATE:
-                name_map: dict = puzzle.name_map
-                return DigitalState(self.ro, puzzle.slug, name_map.keys())
+                name_map: dict[str, str] = puzzle.name_map
+                return DigitalState(self.ro, puzzle.slug, list(name_map.keys()))
             case base.PuzzleType.SEQUENCE:
                 target_sequence: list[str] = puzzle.extras.target_state
                 return Sequence(self.ro, puzzle.slug, target_sequence)
             case base.PuzzleType.SPEECH_DETECTION:
                 return SpeechDetection(self.ro, puzzle.slug)
-            case _:
-                raise ValueError(f"Puzzle type {puzzle.type} not supported.")
+        raise ValueError(f"Puzzle type {puzzle.type} not supported.")

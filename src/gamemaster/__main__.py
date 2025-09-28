@@ -1,9 +1,11 @@
-from log import log
-from room_orchestrator import RoomOrchestrator
-from settings import settings
 import json
 import os
+
 import escmodels.base as base
+
+from gamemaster.log import log
+from gamemaster.room_orchestrator import RoomOrchestrator
+from gamemaster.settings import settings
 
 
 def main():
@@ -20,6 +22,7 @@ def main():
         pass
     except Exception as e:
         log.critical(f"Raised unhandled exception. {e}")
+        raise e
     finally:
         orchestrator.stop_loop()
         log.warning(f"Stopped room orchestrator {settings.room_slug}.")
