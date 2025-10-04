@@ -22,6 +22,7 @@ from escmodels.db.models import (
     Room,
 )
 from escmodels.requests import (
+    AnyRoomActionRequestDict,
     SkipPuzzleRequest,
     TimerAddRequest,
     RequestResult,
@@ -102,14 +103,16 @@ class RoomOrchestrator(ABC):
         self._game_objects.remove(ge)
         await ge.stop()
 
-    def get_total_elapsed_time(self) -> int:
-        if self.state.state is not base.TimerState.ACTIVE:
-            return self.state.time_elapsed_on_pause
-        return (
-            self.state.time_elapsed_on_pause
-            + (
-                datetime.now() - datetime.fromisoformat(self.state.start_timestamp)
-            ).seconds
+    def get_gametime_elapsed_seconds(self) -> int:
+        """Return the number of seconds passed in gametime.
+        Excludes time spent in pause. If the game has not started
+        returns 0.
+        """
+        if not self.state.start_timestamp:
+            return 0
+        return int(
+            (datetime.now() - datetime.fromisoformat(self.state.start_timestamp)).total_seconds()
+            - self.state.time_elapsed_on_pause
         )
 
     async def reset_room(self):
@@ -121,7 +124,7 @@ class RoomOrchestrator(ABC):
 
     async def finish_game(self, success: bool | None = False):
         new_state: base.TimerState = base.TimerState.FINISHED
-        total_time_elapsed = self.get_total_elapsed_time()
+        total_time_elapsed = self.get_gametime_elapsed_seconds()
         stop_timestamp = datetime.now()
         update_values: dict = {
             "seconds_taken": total_time_elapsed,
@@ -156,7 +159,7 @@ class RoomOrchestrator(ABC):
             event = GameEvent(
                 game_id=self.state.active_game_id,
                 created_on=datetime.now(),
-                gametime=self.get_total_elapsed_time(),
+                gametime=self.get_gametime_elapsed_seconds(),
                 type=type,
                 data=data,
             )
@@ -168,7 +171,7 @@ class RoomOrchestrator(ABC):
             raise ValueError(
                 f"Stage {self.active_stage.slug} is not active. Cannot finish."
             )
-        stage_gametime = self.get_total_elapsed_time()
+        stage_gametime = self.get_gametime_elapsed_seconds()
         async with obtain_session() as session:
             completion = StageCompletion(
                 stage_id=self.stage_db_ids[self.active_stage_index],
@@ -215,7 +218,7 @@ class RoomOrchestrator(ABC):
         log.info("Stopped.")
 
     def stop_loop(self) -> None:
-        task = asyncio.create_task(self.stop())
+        _ = asyncio.create_task(self.stop())
 
     async def start_mqtt(self) -> None:
         await self.mqtt.connect(self.settings.mqtt_url, int(self.settings.mqtt_port))
@@ -295,18 +298,18 @@ class RoomOrchestrator(ABC):
         self.stage_completions = []
         await self.redis.delete(f"{self.room_key}/stage_completions")
 
-    async def handle_request(self, request: dict) -> RequestResult:
+    async def handle_request(self, request: AnyRoomActionRequestDict) -> RequestResult:
         result = RequestResult()
         try:
             if request["action"] == "skip":
-                valid_request = SkipPuzzleRequest.model_validate(request)
+                skip_request = SkipPuzzleRequest.model_validate(request)
                 try:
                     await self.find_puzzle(
-                        valid_request.stage, valid_request.puzzle
+                        skip_request.stage, skip_request.puzzle
                     ).skip()
                 except KeyError:
                     raise ValueError(
-                        f"Could not find puzzle {request.puzzle} in stage {request.stage}."
+                        f"Could not find puzzle {skip_request.puzzle} in stage {skip_request.stage}."
                     )
             elif request["action"] == "start":
                 if self.state.state in [
@@ -334,6 +337,16 @@ class RoomOrchestrator(ABC):
                             active_game_id=game_id,
                         )
                         await self.load_stage(0)
+                elif self.state.state in (base.TimerState.PAUSED):
+                    elapsed = self.state.time_elapsed_on_pause
+                    if self.state.pause_timestamp:
+                        elapsed += (datetime.now() - datetime.fromisoformat(self.state.pause_timestamp)).total_seconds()
+                    await self.update_room(
+                        state=base.TimerState.ACTIVE,
+                        pause_timestamp=None,
+                        time_elapsed_on_pause=int(elapsed),
+                    )
+
             elif request["action"] == "pause":
                 if self.state.state in [
                     base.TimerState.PAUSED,
@@ -345,16 +358,9 @@ class RoomOrchestrator(ABC):
                         f"Could not pause room that's in state {self.state.state}"
                     )
                 elif self.state.state in [base.TimerState.ACTIVE]:
-                    total_time_elapsed = (
-                        self.state.time_elapsed_on_pause
-                        + (
-                            datetime.now()
-                            - datetime.fromisoformat(self.state.start_timestamp)
-                        ).seconds
-                    )
                     await self.update_room(
-                        time_elapsed_on_pause=total_time_elapsed,
                         state=base.TimerState.PAUSED,
+                        pause_timestamp=datetime.now().isoformat()
                     )
             elif request["action"] == "stop":
                 if self.state.state in [base.TimerState.STOPPED]:
@@ -381,7 +387,7 @@ class RoomOrchestrator(ABC):
             for stage in self.state.stages
         }
 
-    async def update_room(self, *, stages: list[dict] | None = None, **kwargs):
+    async def update_room(self, *, stages: list[dict[str, Any]] | None = None, **kwargs):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
 
         if "state" in kwargs and self.state.active_game_id:
