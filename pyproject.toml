@@ -14,7 +14,7 @@ dependencies = [
     "sqlalchemy>=2.0.43",
     "ctrlesc-models @ file:///home/sevenreek/Development/ctrlesc/ctrlesc-gm/../ctrlesc-models",
     "snowflake-id>=1.0.2",
-    "nava>=0.7",
+    "pygame>=2.6.1",
 ]
 readme = "README.md"
 requires-python = ">= 3.12"
