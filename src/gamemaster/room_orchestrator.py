@@ -2,9 +2,11 @@ import json
 import asyncio
 import signal
 from abc import ABC
-from typing import Any
+from typing import Any, Unpack, cast
 from datetime import datetime
 from os import getpid
+from escmodels.base.room import RoomStateUpdateKwargs
+from snowflake import SnowflakeGenerator
 
 from pydantic import ValidationError
 from sqlalchemy import update, select
@@ -39,10 +41,14 @@ from gamemaster.stage_orchestrator import (
     MQTTMessageHandler,
 )
 
+
 class RoomOrchestrator(ABC):
     def __init__(self, settings: Settings, config: base.RoomConfig):
         self.settings = settings
         self.config = config
+        self.idgen = SnowflakeGenerator(
+            self.config.id, epoch = int(datetime(2020, 1, 1).timestamp())
+        )
         self._stages: list[StageOrchestrator] = PydanticRoomBuilder(
             self
         ).generate_stages_from_json(config.stages)
@@ -126,7 +132,7 @@ class RoomOrchestrator(ABC):
         new_state: base.TimerState = base.TimerState.FINISHED
         total_time_elapsed = self.get_gametime_elapsed_seconds()
         stop_timestamp = datetime.now()
-        update_values: dict = {
+        update_values: dict[str, Any] = {
             "seconds_taken": total_time_elapsed,
             "ended_on": stop_timestamp,
         }
@@ -148,7 +154,7 @@ class RoomOrchestrator(ABC):
             await session.commit()
         await self.update_room(
             state=new_state,
-            stopped_on=stop_timestamp.isoformat(),
+            stop_timestamp=stop_timestamp.isoformat(),
             time_elapsed_on_pause=total_time_elapsed,
         )
 
@@ -167,6 +173,7 @@ class RoomOrchestrator(ABC):
             await session.commit()
 
     async def finish_stage(self, stage_slug: str) -> None:
+        assert self.active_stage is not None and self.active_stage_index is not None, "Finishing game but no active stage"
         if stage_slug != self.active_stage.slug:
             raise ValueError(
                 f"Stage {self.active_stage.slug} is not active. Cannot finish."
@@ -256,9 +263,9 @@ class RoomOrchestrator(ABC):
         async with client.pubsub() as ps:
             await ps.psubscribe(f"room/request/{self.room_slug}/*")
             while self._loop.is_running():
-                message = await ps.get_message(
+                message = cast(dict[str, str] | None, await ps.get_message(
                     ignore_subscribe_messages=True, timeout=1.0
-                )
+                ))
                 if message is None:
                     continue
                 channel = message["channel"]
@@ -267,9 +274,9 @@ class RoomOrchestrator(ABC):
                 try:
                     result = await self.handle_request(data)
                 except ValidationError as e:
-                    result = RequestResult(False, str(e))
+                    result = RequestResult(success=False, error=str(e))
                 ack_channel = f"room/ack/{self.room_slug}/{message_id}"
-                delivered_count = await client.publish(
+                _delivered_count = await client.publish(
                     ack_channel, result.model_dump_json()
                 )
 
@@ -322,7 +329,7 @@ class RoomOrchestrator(ABC):
                     )
                 elif self.state.state in [base.TimerState.READY]:
                     async with obtain_session() as session:
-                        game_id = base.generate_game_nanoid()
+                        game_id = next(self.idgen)
                         start_timestamp = datetime.now()
                         game = Game(
                             room_slug=self.room_slug,
@@ -387,7 +394,7 @@ class RoomOrchestrator(ABC):
             for stage in self.state.stages
         }
 
-    async def update_room(self, *, stages: list[dict[str, Any]] | None = None, **kwargs):
+    async def update_room(self, **kwargs: Unpack[RoomStateUpdateKwargs]):
         """Updates the room's state. Trusts that kwargs are prevalidated."""
 
         if "state" in kwargs and self.state.active_game_id:
@@ -395,8 +402,8 @@ class RoomOrchestrator(ABC):
                 GameEventType.TIMER_CHANGED, {"state": kwargs["state"]}
             )
         self.state = self.state.model_copy(update=kwargs)
-        redis_update_data = kwargs
-        if stages:
+        redis_update_data = cast(dict[str, Any], kwargs)
+        if stages := kwargs.get("stages"):
             self.state.stages = [base.StageState.model_validate(s) for s in stages]
             self.update_puzzle_state_map()
             redis_update_data["stages"] = [
