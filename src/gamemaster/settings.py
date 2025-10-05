@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     rooms_config_directory: str = "/home/sevenreek/Development/ctrlesc/ctrlesc-api/src/api/public/config/rooms"
-    room_slug: str = "demonic-presence"
+    room_slug: str = "porta-aenigma"
     redis_url: str = "localhost"
     redis_port: str = "6379"
     mqtt_url: str = "localhost"

@@ -1,11 +1,15 @@
 import json
 import asyncio
 import signal
+from itertools import chain
 from abc import ABC
 from typing import Any, Unpack, cast
+from collections import defaultdict
 from datetime import datetime
 from os import getpid
 from escmodels.base.room import RoomStateUpdateKwargs
+from gamemaster.ents.base import GameElement, MQTTMessageHandlerType
+
 from snowflake import SnowflakeGenerator
 
 from pydantic import ValidationError
@@ -37,9 +41,34 @@ from gamemaster.room_builder import PydanticRoomBuilder
 from gamemaster.stage_orchestrator import (
     PuzzleOrchestrator,
     StageOrchestrator,
-    GameObject,
-    MQTTMessageHandler,
 )
+
+class MQTTHandler:
+    def __init__(self):
+        self.handlers: dict[str, list[MQTTMessageHandlerType]] = defaultdict(list)
+
+    def add_handler(self, topic: str, coro: MQTTMessageHandlerType):
+        self.handlers[topic].append(coro)
+
+    def remove_handler(self, topic: str, coro: MQTTMessageHandlerType):
+        self.handlers.get(topic, []).remove(coro)
+
+    async def handle(self, topic: str, payload: bytes):
+        handlers_for_topic = list(
+            chain(
+                *(
+                    handler
+                    for handler_topic, handler in self.handlers.items()
+                    if topic.startswith(handler_topic)
+                )
+            )
+        )
+        log.info(
+            f"Received message in topic {repr(topic)} for {len(handlers_for_topic)} handlers."
+        )
+        await asyncio.gather(
+            *(handler(topic, payload) for handler in handlers_for_topic)
+        )
 
 
 class RoomOrchestrator(ABC):
@@ -52,7 +81,7 @@ class RoomOrchestrator(ABC):
         self._stages: list[StageOrchestrator] = PydanticRoomBuilder(
             self
         ).generate_stages_from_json(config.stages)
-        self._game_objects: list[GameObject] = []
+        self._entities: list[GameElement] = []
         self._loop = asyncio.get_event_loop()
         self.mqtt = MQTTClient(f"{self.settings.room_slug}-{getpid()}")
         self.mqtt.on_message = self.on_message
@@ -63,7 +92,7 @@ class RoomOrchestrator(ABC):
             encoding="utf-8",
         )
         self.running = False
-        self.mqtt_handler = MQTTMessageHandler()
+        self.mqtt_handler = MQTTHandler()
         self._loop.add_signal_handler(signal.SIGTERM, self._stop_signal)
         self._loop.add_signal_handler(signal.SIGINT, self._stop_signal)
         self.stage_db_ids: list[int] = []
@@ -101,12 +130,12 @@ class RoomOrchestrator(ABC):
             return 0
         return self.stage_completions[-1]
 
-    async def add_game_element(self, ge: GameObject):
-        self._game_objects.append(ge)
+    async def add_game_element(self, ge: GameElement):
+        self._entities.append(ge)
         await ge.start()
 
-    async def remove_game_element(self, ge: GameObject):
-        self._game_objects.remove(ge)
+    async def remove_game_element(self, ge: GameElement):
+        self._entities.remove(ge)
         await ge.stop()
 
     def get_gametime_elapsed_seconds(self) -> int:
@@ -125,7 +154,7 @@ class RoomOrchestrator(ABC):
         await self.reset_room_state_redis()
         await asyncio.gather(
             *(stage.reset() for stage in self._stages),
-            *(element.reset() for element in self._game_objects),
+            *(element.reset() for element in self._entities),
         )
 
     async def finish_game(self, success: bool | None = False):
@@ -268,19 +297,20 @@ class RoomOrchestrator(ABC):
                 ))
                 if message is None:
                     continue
-                channel = message["channel"]
-                message_id = channel.split("/")[-1]
-                data = json.loads(message["data"])
                 try:
+                    channel = message["channel"]
+                    message_id = channel.split("/")[-1]
+                    data = json.loads(message["data"])
                     result = await self.handle_request(data)
-                except ValidationError as e:
+                except Exception as e:
                     result = RequestResult(success=False, error=str(e))
+                    log.error(str(e))
                 ack_channel = f"room/ack/{self.room_slug}/{message_id}"
                 _delivered_count = await client.publish(
                     ack_channel, result.model_dump_json()
                 )
 
-    async def update_puzzle(self, stage: str, puzzle: str, /, **kwargs):
+    async def update_puzzle(self, stage: str, puzzle: str, /, **kwargs: Any):
         puzzle_state = self.puzzle_state_map[stage][puzzle]
         puzzle_state.__dict__.update(kwargs)
         await self.redis.json().set(

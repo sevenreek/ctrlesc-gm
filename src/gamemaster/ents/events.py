@@ -1,0 +1,3 @@
+
+EVENT_STATE_CHANGED = "state"
+EVENT_COMPLETED = "completed"

@@ -1,11 +1,13 @@
 from typing import TYPE_CHECKING, Any
 
+from escmodels.base.entity import AnyEntityConfig
+from gamemaster.ents.base import GameElement
 from gamemaster.stage_orchestrator import StageOrchestrator, PuzzleOrchestrator
 from gamemaster.puzzles import DigitalState, SpeechDetection, Sequence
 import escmodels.base as base
 
 if TYPE_CHECKING:
-    from room_orchestrator import RoomOrchestrator
+    from gamemaster.room_orchestrator import RoomOrchestrator
 
 
 class RoomBuilder:
@@ -62,3 +64,6 @@ class PydanticRoomBuilder:
             case base.PuzzleType.SPEECH_DETECTION:
                 return SpeechDetection(self.ro, puzzle.slug)
         raise ValueError(f"Puzzle type {puzzle.type} not supported.")
+
+    def generate_entity(self, entity: AnyEntityConfig) -> GameElement:
+        pass

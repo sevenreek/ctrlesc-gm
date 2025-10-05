@@ -1,11 +1,48 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from gamemaster.log import log
 from gamemaster.settings import settings
-from gamemaster.stage_orchestrator import PuzzleOrchestrator
+from gamemaster.ents import GameElement
+from gamemaster.ents import events
 
 if TYPE_CHECKING:
-    from room_orchestrator import RoomOrchestrator
+    from gamemaster.room_orchestrator import RoomOrchestrator
+
+
+type PuzzleEventHandlerType = Callable[["PuzzleOrchestrator", Any], Awaitable[None]];
+
+class PuzzleOrchestrator(GameElement):
+    def __init__(
+        self,
+        room_orchestrator: "RoomOrchestrator",
+        element_slug: str,
+    ):
+        super().__init__(room_orchestrator, element_slug)
+        self.event_handlers: dict[str, PuzzleEventHandlerType] = {}
+        self.completed = False
+
+
+    async def trigger_event(self, event_type: str, detail: Any = None):
+        try:
+            await self.event_handlers[str(event_type)](self, detail)
+        except (KeyError, TypeError):
+            pass
+
+    async def complete(self):
+        prev_completed = self.completed
+        self.completed = True
+        if not prev_completed:
+            log.info(f"Puzzle {repr(self.element_slug)} was completed.")
+            await self.trigger_event(events.EVENT_COMPLETED, True)
+
+    def set_event_handler(self, event_type: str, coro: PuzzleEventHandlerType):
+        self.event_handlers[str(event_type)] = coro
+
+    async def skip(self):
+        await self.complete()
+
+    async def reset(self):
+        self.completed = False
 
 
 class MQTTBasedPuzzle(PuzzleOrchestrator):
@@ -60,7 +97,7 @@ class DigitalState(MQTTBasedPuzzle):
         self.state = new_state
         json_data = {self.index_map[i]: value for i, value in enumerate(self.state)}
         await self.trigger_event(
-            PuzzleOrchestrator.Events.EVENT_STATE_CHANGED, json_data
+            events.EVENT_STATE_CHANGED, json_data
         )
         if all(self.state):
             await self.complete()
@@ -99,7 +136,7 @@ class Sequence(MQTTBasedPuzzle):
             "sequence": [str(sequence_element) for sequence_element in self.state]
         }
         await self.trigger_event(
-            PuzzleOrchestrator.Events.EVENT_STATE_CHANGED, json_data
+            events.EVENT_STATE_CHANGED, json_data
         )
         if all(self.state):
             await self.complete()
